@@ -131,7 +131,7 @@ class VideoGenerator:
             if len(effects) > 0:
                 effect = random.choice(effects)
                 clip = effect(clip)
-            clip = clip.filter("scale", 1080, 1920)
+            clip = clip.filter("scale", 1080, 1920).filter("setsar", "1")  # <-- Add setsar filter
 
             # apply gray effect for motivational video
             if (
@@ -204,6 +204,12 @@ class VideoGenerator:
             logger.error(f"Speech file {speech_path} is invalid or corrupt: {e}")
             if music_input:
                 audio_mix = music_input
+
+        # If no disk speech file was provided but a speech_filter (in-memory concat) was passed,
+        # use that as the audio mix so dynamic prompts (different TTS per run) are honored.
+        if audio_mix is None and speech_filter is not None:
+            audio_mix = speech_filter
+            logger.info("Using in-memory speech filter for narration (no speech_path provided).")
 
         # Output video (and audio if available)
         if audio_mix:

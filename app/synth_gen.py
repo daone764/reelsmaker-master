@@ -4,8 +4,7 @@ from typing import Literal
 
 from app.utils.strings import log_attempt_number
 from app.utils.strings import make_cuid
-from elevenlabs import Voice, VoiceSettings, save
-from elevenlabs import ElevenLabs  # <-- Fix import
+from elevenlabs import Voice, VoiceSettings, save, ElevenLabs  # <-- keep client and models only
 import httpx
 from loguru import logger
 from pydantic import BaseModel
@@ -40,6 +39,7 @@ class SynthGenerator:
         if not api_key:
             logger.error("ELEVENLABS_API_KEY not set in environment variables.")
             raise ValueError("ELEVENLABS_API_KEY is required for ElevenLabs TTS.")
+        # create client instance (keeps prior behavior)
         self.client = ElevenLabs(api_key=api_key)
 
     def set_speech_props(self):
@@ -64,13 +64,97 @@ class SynthGenerator:
             ),
         )
 
-        audio = self.client.generate(
-            text=text, voice=voice, model="eleven_multilingual_v2", stream=False
-        )
+        audio = None
 
-        save(audio, self.speech_path)
+        try:
+            # Preferred: client.generate(...) if available and callable
+            if hasattr(self.client, "generate") and callable(getattr(self.client, "generate")):
+                audio = self.client.generate(
+                    text=text, voice=voice, model="eleven_multilingual_v2", stream=False
+                )
+            # Some SDK versions expose text_to_speech as a callable helper
+            elif hasattr(self.client, "text_to_speech"):
+                tts_attr = getattr(self.client, "text_to_speech")
+                if callable(tts_attr):
+                    audio = tts_attr(text=text, voice=voice, model="eleven_multilingual_v2")
+                else:
+                    # If text_to_speech returns a helper/client object, try common method names on it
+                    for method_name in ("generate", "synthesize", "stream", "speak", "__call__"):
+                        method = getattr(tts_attr, method_name, None)
+                        if callable(method):
+                            audio = method(text=text, voice=voice, model="eleven_multilingual_v2")
+                            break
+                    else:
+                        logger.error(
+                            "ElevenLabs client.text_to_speech returned a non-callable helper and no known callable method found."
+                        )
+                        raise AttributeError("Unsupported elevenlabs client API shape (text_to_speech helper).")
+            else:
+                logger.error(
+                    "ElevenLabs client does not expose a supported generate/text_to_speech API. "
+                    "Check your installed elevenlabs package version."
+                )
+                raise AttributeError("Unsupported elevenlabs client API: missing generate/text_to_speech")
+        except Exception as e:
+            logger.exception(f"ElevenLabs TTS call failed: {e}")
+            raise
 
-        return self.speech_path
+        # Try to save the returned audio in multiple formats
+        save_error = None
+        try:
+            # If library provides a save helper that accepts the returned audio
+            save(audio, self.speech_path)
+            return self.speech_path
+        except Exception as e:
+            save_error = e
+            logger.debug(f"elevenlabs.save() failed, attempting manual save fallback: {e}")
+
+        # Fallbacks for different return types
+        try:
+            # bytes-like
+            if isinstance(audio, (bytes, bytearray)):
+                with open(self.speech_path, "wb") as fh:
+                    fh.write(audio)
+                return self.speech_path
+
+            # httpx / requests Response-like
+            if hasattr(audio, "content") and isinstance(audio.content, (bytes, bytearray)):
+                with open(self.speech_path, "wb") as fh:
+                    fh.write(audio.content)
+                return self.speech_path
+
+            # file-like object
+            if hasattr(audio, "read") and callable(audio.read):
+                with open(self.speech_path, "wb") as fh:
+                    fh.write(audio.read())
+                return self.speech_path
+
+            # some SDK audio wrappers may expose .audio or .data
+            if hasattr(audio, "audio") and isinstance(audio.audio, (bytes, bytearray)):
+                with open(self.speech_path, "wb") as fh:
+                    fh.write(audio.audio)
+                return self.speech_path
+
+            if hasattr(audio, "data") and isinstance(audio.data, (bytes, bytearray)):
+                with open(self.speech_path, "wb") as fh:
+                    fh.write(audio.data)
+                return self.speech_path
+
+            # last attempt: try converting to bytes via bytes()
+            try:
+                b = bytes(audio)
+                with open(self.speech_path, "wb") as fh:
+                    fh.write(b)
+                return self.speech_path
+            except Exception:
+                pass
+
+            # If none of the above worked, raise a helpful error
+            logger.exception(f"Unable to save audio returned by ElevenLabs (type={type(audio)}).")
+            raise RuntimeError(f"Unsupported audio return type from ElevenLabs: {type(audio)}")
+        except Exception as e:
+            logger.exception(f"Failed to save ElevenLabs audio (fallbacks): {e}; initial save error: {save_error}")
+            raise
 
     async def generate_with_tiktok(self, text: str) -> str:
         tiktokvoice.tts(text, voice=str(self.config.voice), filename=self.speech_path)
@@ -97,6 +181,15 @@ class SynthGenerator:
             res = await client.get(url)
             save(res.content, self.speech_path)
         return self.speech_path
+
+    async def elevenlabs_tts(self, text: str, voice: str) -> str:
+        # keep a compatible helper in case other code calls it
+        try:
+            # reuse the same client path as generate_with_eleven
+            return await self.generate_with_eleven(text)
+        except Exception as e:
+            logger.error(f"ElevenLabs helper failed: {e}")
+            raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(4), after=log_attempt_number) # type: ignore
     async def synth_speech(self, text: str) -> str:

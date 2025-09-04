@@ -5,7 +5,7 @@ from typing import Literal
 from app.utils.strings import log_attempt_number
 from app.utils.strings import make_cuid
 from elevenlabs import Voice, VoiceSettings, save
-from elevenlabs.client import ElevenLabs
+from elevenlabs import ElevenLabs  # <-- Fix import
 import httpx
 from loguru import logger
 from pydantic import BaseModel
@@ -36,9 +36,11 @@ class SynthGenerator:
 
         os.makedirs(self.base, exist_ok=True)
 
-        self.client = ElevenLabs(
-            api_key=os.getenv("ELEVENLABS_API_KEY"),
-        )
+        api_key = os.getenv("ELEVENLABS_API_KEY")
+        if not api_key:
+            logger.error("ELEVENLABS_API_KEY not set in environment variables.")
+            raise ValueError("ELEVENLABS_API_KEY is required for ElevenLabs TTS.")
+        self.client = ElevenLabs(api_key=api_key)
 
     def set_speech_props(self):
         ky = (

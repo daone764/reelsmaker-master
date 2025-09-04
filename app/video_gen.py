@@ -3,6 +3,7 @@ import os
 import random
 from typing import TYPE_CHECKING, Literal
 from pathlib import Path
+from datetime import datetime  # <-- Add import
 
 from app.effects import zoom_in_effect, zoom_out_effect
 from app.utils.strings import (
@@ -101,9 +102,16 @@ class VideoGenerator:
             f"{styles.get(position, 'Alignment=10')}"
         )
 
-        fonts_dir = "./narrator/sys/fonts"
+        fonts_dir = "./fonts"  # <-- Ensure this is set to your fonts directory
+        if not os.path.exists(fonts_dir):
+            logger.warning(f"Fonts directory {fonts_dir} not found; skipping subtitles.")
+            return clip  # Return original clip without subtitles
         return clip.filter(
-            "subtitles", filename=subtitle_path, fontsdir=fonts_dir, force_style=style
+            "subtitles",
+            filename=subtitle_path,
+            fontsdir=fonts_dir,
+            force_style=style,
+            charenc="UTF-8",
         )
 
     def add_audio_mix(self, video_stream, background_music_filter, tts_audio_filter):
@@ -142,46 +150,104 @@ class VideoGenerator:
         speech_filter: FFMPEG_TYPE,
         subtitles_path: str,
         video_duration: float,
+        speech_path: str,  # <-- add this parameter
     ) -> str:
         logger.info("Generating video...")
         effects = [zoom_out_effect, zoom_in_effect]
 
-        # Define output path
-        output_path = (Path(self.cwd) / f"{self.job_id}_final.mp4").as_posix()
+        # Fix path for Windows compatibility
+        # Instead of a hash, use a timestamp-based name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(self.cwd, f"reels_video_{timestamp}.mp4")  # <-- Friendly on-disk name
 
-        # music must end at the end of the speech, add extra 3 seconds to make it look good
-        music_input = ffmpeg.input(
-            adjust_audio_to_target_dBFS(self.config.background_music_path),
-            t=video_duration,
-        )
+        # Handle background music
+        music_input = None
+        if self.config.background_music_path and os.path.exists(self.config.background_music_path):
+            music_input = ffmpeg.input(
+                adjust_audio_to_target_dBFS(self.config.background_music_path),
+                t=video_duration,
+            )
+        else:
+            logger.warning("Background music path is None or invalid; proceeding without it.")
 
         if self.base_engine.config.video_type == "motivational":
             effects = []
 
         video_stream = self.concatenate_clips(clips, effects)
         video_stream = self.apply_watermark(video_stream)
-        video_stream = self.apply_subtitle(video_stream, subtitles_path)
-        video_stream = self.add_audio_mix(
-            video_stream=video_stream,
-            tts_audio_filter=speech_filter,
-            background_music_filter=music_input,
-        )
 
-        output = ffmpeg.output(
-            video_stream,
-            output_path,
-            vcodec="libx264",
-            acodec="aac",
-            preset="veryfast",
-            threads=2,
-            # loglevel="quiet",
-        )
+        # Validate subtitle file
+        if not os.path.exists(subtitles_path):
+            logger.error(f"Subtitle file {subtitles_path} does not exist; skipping subtitles.")
+            subtitles_path = None
+        else:
+            video_stream = self.apply_subtitle(video_stream, subtitles_path)
+
+        # Validate speech file and prepare audio mix
+        audio_mix = None
+        try:
+            if speech_path and os.path.exists(speech_path):
+                ffmpeg.probe(speech_path)  # <-- Check if file is valid
+                speech_filter = ffmpeg.input(speech_path)  # <-- Create filter here
+                if music_input:
+                    audio_mix = ffmpeg.filter(
+                        [music_input, speech_filter], "amix", duration="longest", dropout_transition=0
+                    )
+                else:
+                    audio_mix = speech_filter
+                logger.info(f"Speech file loaded: {speech_path}")  # <-- Add success log
+            else:
+                logger.warning(f"Speech file {speech_path} is missing or invalid; proceeding without narration.")
+                if music_input:
+                    audio_mix = music_input
+        except ffmpeg.Error as e:
+            logger.error(f"Speech file {speech_path} is invalid or corrupt: {e}")
+            if music_input:
+                audio_mix = music_input
+
+        # Output video (and audio if available)
+        if audio_mix:
+            output = ffmpeg.output(
+                video_stream,
+                audio_mix,
+                output_path,
+                vcodec="libx264",
+                acodec="aac",
+                preset="veryfast",
+                threads=2,
+                loglevel="error",
+            ).global_args('-map', '0:v', '-map', '1:a')
+        else:
+            output = ffmpeg.output(
+                video_stream,
+                output_path,
+                vcodec="libx264",
+                preset="veryfast",
+                threads=2,
+                loglevel="error",
+            )
 
         logger.debug(f"FFMPEG CMD: {output.get_args()}")
-        output.run(overwrite_output=True, cmd=self.ffmpeg_cmd)
+        try:
+            # Capture stderr for debugging
+            stdout, stderr = output.run(overwrite_output=True, cmd=self.ffmpeg_cmd, capture_stdout=True, capture_stderr=True)
+            if stderr:
+                logger.error(f"ffmpeg stderr: {stderr.decode('utf-8', errors='replace')}")
+        except ffmpeg.Error as e:
+            logger.error(f"ffmpeg error: {e.stderr.decode('utf-8', errors='replace') if e.stderr else 'No stderr available'}")
+            raise
 
         logger.info("Video generation complete.")
-        return output_path
+        return output_path  # <-- Return the friendly path
+
+    def _prepare_video_inputs(self, video_paths):
+        import ffmpeg
+        video_streams = []
+        for path in video_paths:
+            # Add setsar=1 filter to each input
+            stream = ffmpeg.input(path).filter('setsar', '1')
+            video_streams.append(stream)
+        return video_streams
 
     # def get_background_audio(self, video_clip: VideoClip, song_path: str) -> AudioClip:
     #     """Takes the original audio and adds the background audio"""
@@ -239,7 +305,10 @@ class VideoGenerator:
     def apply_watermark(self, video_stream):
         """Adds a watermark to the bottom-right of the video."""
 
-        sysfont = os.path.join(os.getcwd(), "narrator/sys/fonts/luckiestguy.ttf")
+        sysfont = os.path.join(os.getcwd(), "fonts", "LuckiestGuy-Regular.ttf")  # <-- Ensure this matches your file
+        if not os.path.exists(sysfont):
+            logger.warning(f"Font file {sysfont} not found; skipping watermark.")
+            return video_stream  # Return original stream without watermark
 
         # Check if watermark path/text is set and watermark type is valid
         if (
@@ -260,7 +329,7 @@ class VideoGenerator:
                 fontcolor="white",
                 fontfile=sysfont,
             )
-            logger.warning(f"Using text watermark with font: {sysfont}")
+            logger.info(f"Using font: {sysfont}")  # <-- Add debug log
 
         # Image-based watermark
         elif self.config.watermark_type == "image":

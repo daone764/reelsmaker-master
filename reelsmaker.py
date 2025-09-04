@@ -3,6 +3,7 @@ import multiprocessing
 import os
 import typing
 from uuid import uuid4
+from datetime import datetime  # <-- Add for timestamp
 
 from loguru import logger
 import streamlit as st
@@ -180,7 +181,19 @@ async def main():
                 output = await reels_maker.start()
                 st.balloons()
                 st.video(output.video_file_path, autoplay=True)
-                st.download_button("Download Reels", output.video_file_path, file_name="reels.mp4")
+                with open(output.video_file_path, "rb") as f:
+                    video_data = f.read()
+                logger.info(f"Video file size: {len(video_data)} bytes")
+                # Generate a friendly file name with timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                friendly_name = f"reels_video_{timestamp}.mp4"  # <-- Better name
+                st.download_button(
+                    label="Download Reels",
+                    data=video_data,
+                    file_name=friendly_name,  # <-- Use friendly name
+                    key="download_reels",
+                )
+                st.success("Download ready!")
             except Exception as e:
                 del queue[queue_id]
                 logger.exception(f"removed from queue: {queue_id}: -> {e}")
@@ -193,3 +206,4 @@ async def main():
 #   streamlit run reelsmaker.py
 if __name__ == "__main__":
     asyncio.run(main())
+   

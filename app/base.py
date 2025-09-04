@@ -3,6 +3,7 @@ import json
 import multiprocessing
 import os
 import shutil
+import tempfile  # <-- Add import
 from typing import Any, Literal
 from app.config import images_cache_path, speech_cache_path
 from app.utils.path_util import download_resource
@@ -61,7 +62,7 @@ class BaseGeneratorConfig(BaseModel):
     @computed_field
     @property
     def cwd(self) -> str:
-        job_cwd = f"/tmp/narrator/{self.job_id}"
+        job_cwd = os.path.join(tempfile.gettempdir(), "narrator", self.job_id)  # <-- Use tempfile
         os.makedirs(job_cwd, exist_ok=True)
         return job_cwd
 
@@ -127,4 +128,3 @@ class BaseEngine(ABC):
         except Exception as e:
             logger.error(f"failed to remove speech path: {e}")
 
- 

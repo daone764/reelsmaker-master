@@ -197,9 +197,10 @@ class ReelsMaker(BaseEngine):
 
         final_video_path = await self.video_generator.generate_video(
             clips=final_clips,
-            subtitles_path=subtitles_path,
             speech_filter=final_speech,
+            subtitles_path=subtitles_path,
             video_duration=video_duration,
+            speech_path=None,  # <-- Add this line (ensure speech_file_path is defined earlier)
         )
 
         logger.info((f"Final video: {final_video_path}"))

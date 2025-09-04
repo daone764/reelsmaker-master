@@ -1,0 +1,40 @@
+streamlit
+python-dotenv
+openai
+requests
+moviepy
+pydub
+numpy
+Pillow
+loguru
+ffmpeg-python
+aiohttp
+pydantic==2.8.2
+pydantic-core==2.20.1
+elevenlabs
+srt-equalizer
+termcolor
+opencv-python
+pytest-asyncio
+pytest
+pytest-mock
+pytest-env
+langchain-core
+langchain
+langchain-openai
+langchain-community
+pysrt
+word2number
+spacy
+sqlmodel
+pydantic-settings
+together
+cuid
+cuid2
+sentry-sdk
+# Add any additional dependencies found in your codebase imports
+
+# pyaudioop is a built-in Python module and does not need to be installed via pip.
+# If you see ModuleNotFoundError for pyaudioop, ensure you are using CPython (not PyPy or other interpreters).
+# Note: pydub requires pyaudioop, which is a built-in module in Python <3.13.
+# If using Python 3.13, consider downgrading to Python 3.12 or use an alternative audio library.

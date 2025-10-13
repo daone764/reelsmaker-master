@@ -10,7 +10,7 @@ loguru
 ffmpeg-python
 aiohttp
 pydantic==2.8.2
-pydantic-core==2.20.1
+pydantic-core==2.41.1
 elevenlabs
 srt-equalizer
 termcolor
